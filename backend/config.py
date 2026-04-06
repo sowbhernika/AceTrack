@@ -63,8 +63,9 @@ class Settings(BaseSettings):
     VALID_COMPANIES: ClassVar[list[str]] = ["AMC", "APE", "AHF"]
 
     # ── Billing-cycle constants ─────────────────────────────────────────
-    BILLING_CYCLE_START_DAY: ClassVar[int] = 26  # 26th of previous month
-    BILLING_CYCLE_END_DAY: ClassVar[int] = 25    # 25th of current month
+    # Cycle: 1st to last day of the current month (dynamic 28/29/30/31)
+    BILLING_CYCLE_START_DAY: ClassVar[int] = 1
+    BILLING_CYCLE_END_DAY: ClassVar[str] = "last"  # dynamic
 
     # ── Priority thresholds (percentage of target achieved) ─────────────
     PRIORITY_THRESHOLDS: ClassVar[dict[str, tuple[float, float]]] = {

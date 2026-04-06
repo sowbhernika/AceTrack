@@ -31,31 +31,17 @@ _IST = pytz.timezone(settings.TIMEZONE)
 
 
 def get_billing_cycle() -> tuple[str, str]:
-    """Return (start_date, end_date) strings for the current billing cycle.
+    """Return (start_date, end_date) strings for the current month cycle.
 
-    Rule:
-      - If today's day >= 26, cycle runs from this month's 26th to next
-        month's 25th.
-      - Otherwise, cycle runs from previous month's 26th to this month's 25th.
-
+    Cycle runs from the 1st to the last day of the current month.
     Dates are returned as ``YYYY-MM-DD``.
     """
-    today = datetime.now(_IST).date()
+    import calendar
 
-    if today.day >= 26:
-        start = today.replace(day=26)
-        # Next month
-        if today.month == 12:
-            end = date(today.year + 1, 1, 25)
-        else:
-            end = date(today.year, today.month + 1, 25)
-    else:
-        # Previous month's 26th
-        if today.month == 1:
-            start = date(today.year - 1, 12, 26)
-        else:
-            start = date(today.year, today.month - 1, 26)
-        end = today.replace(day=25)
+    today = datetime.now(_IST).date()
+    start = today.replace(day=1)
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    end = today.replace(day=last_day)
 
     return start.isoformat(), end.isoformat()
 

@@ -36,22 +36,15 @@ IST = pytz.timezone(settings.TIMEZONE)
 # ---------------------------------------------------------------------------
 
 def _billing_cycle_range(reference: date | None = None) -> tuple[date, date]:
-    """Return ``(cycle_start, cycle_end)`` for the cycle containing *reference*."""
+    """Return ``(cycle_start, cycle_end)`` for the monthly cycle containing *reference*."""
+    import calendar
+
     if reference is None:
         reference = datetime.now(IST).date()
 
-    if reference.day >= 26:
-        start = reference.replace(day=26)
-        if reference.month == 12:
-            end = date(reference.year + 1, 1, 25)
-        else:
-            end = date(reference.year, reference.month + 1, 25)
-    else:
-        if reference.month == 1:
-            start = date(reference.year - 1, 12, 26)
-        else:
-            start = date(reference.year, reference.month - 1, 26)
-        end = reference.replace(day=25)
+    start = reference.replace(day=1)
+    last_day = calendar.monthrange(reference.year, reference.month)[1]
+    end = reference.replace(day=last_day)
 
     return start, end
 

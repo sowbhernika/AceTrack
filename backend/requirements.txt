@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+pandas
+openpyxl
+python-multipart
+pydantic-settings
+python-dotenv
+apscheduler
+httpx
+python-dateutil

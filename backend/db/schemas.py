@@ -79,6 +79,14 @@ class ManagerBulkToggle(BaseModel):
     )
 
 
+class ManagerToggleAll(BaseModel):
+    """Toggle active status for all managers."""
+
+    is_active: bool = Field(
+        ..., description="true = activate, false = deactivate"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  File Upload
 # ═══════════════════════════════════════════════════════════════════════
@@ -114,6 +122,25 @@ class AlertLogResponse(BaseModel):
     performance_pct: float | None = None
     target_lakhs: float | None = None
     actual_lakhs: float | None = None
+    resend_count: int | None = None
+    resent_at: datetime | None = None
+    original_alert_id: int | None = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Notifications
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class NotificationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    message: str
+    level: str
+    is_read: bool
+    created_at: datetime | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -350,6 +350,9 @@ class AlertLog(Base):
     message_preview: Mapped[str | None] = mapped_column(
         String(200), nullable=True, comment="First 200 chars of the message"
     )
+    full_message: Mapped[str | None] = mapped_column(
+        String(2000), nullable=True, comment="Complete message content for resending"
+    )
     status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -360,6 +363,16 @@ class AlertLog(Base):
     )
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=_utcnow()
+    )
+    resent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="Last resend timestamp"
+    )
+    resend_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Number of resend attempts"
+    )
+    original_alert_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="Reference to original alert if this is a resend"
     )
     performance_pct: Mapped[float | None] = mapped_column(
         Float, nullable=True
@@ -372,3 +385,27 @@ class AlertLog(Base):
             f"<AlertLog id={self.id} type={self.alert_type!r} "
             f"status={self.status!r}>"
         )
+
+
+# ── Notifications ─────────────────────────────────────────────────────
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(String(1000), nullable=False)
+    level: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="error",
+        comment="error / warning / info",
+    )
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=_utcnow()
+    )
+
+    def __repr__(self) -> str:
+        return f"<Notification id={self.id} level={self.level!r} read={self.is_read}>"

@@ -7,7 +7,7 @@ alerts to every active manager in each company.
 
 from __future__ import annotations
 
-import asyncio
+
 import logging
 from datetime import datetime, timedelta
 
@@ -141,9 +141,7 @@ def run_sales_daily_alert(db_session: Session) -> int:
             data["manager_name"] = mgr.manager_name
             message = sales_daily_message(data)
 
-            result = asyncio.get_event_loop().run_until_complete(
-                send_whatsapp(mgr.manager_phone, message)
-            )
+            result = send_whatsapp(mgr.manager_phone, message)
             status = result.get("status", "failed")
 
             # Log to DB
@@ -153,6 +151,7 @@ def run_sales_daily_alert(db_session: Session) -> int:
                 manager_name=mgr.manager_name,
                 manager_phone=mgr.manager_phone,
                 message_preview=message[:200],
+                full_message=message,
                 status=status,
                 error_message=result.get("error"),
                 performance_pct=pct,
@@ -169,9 +168,7 @@ def run_sales_daily_alert(db_session: Session) -> int:
                 status,
             )
 
-            # Rate-limit pause
-            import time
-            time.sleep(2)
+            # Human-like delays are handled inside send_whatsapp()
 
     try:
         db_session.commit()

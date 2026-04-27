@@ -8,7 +8,7 @@ against targets, and sends WhatsApp alerts to active managers.
 
 from __future__ import annotations
 
-import asyncio
+
 import logging
 import time
 from datetime import datetime, timedelta
@@ -178,9 +178,7 @@ def run_production_daily_alert(db_session: Session) -> int:
             data["manager_name"] = mgr.manager_name
             message = production_daily_message(data)
 
-            result = asyncio.get_event_loop().run_until_complete(
-                send_whatsapp(mgr.manager_phone, message)
-            )
+            result = send_whatsapp(mgr.manager_phone, message)
             status = result.get("status", "failed")
 
             alert_log = AlertLog(
@@ -189,6 +187,7 @@ def run_production_daily_alert(db_session: Session) -> int:
                 manager_name=mgr.manager_name,
                 manager_phone=mgr.manager_phone,
                 message_preview=message[:200],
+                full_message=message,
                 status=status,
                 error_message=result.get("error"),
                 performance_pct=pct,
@@ -205,7 +204,7 @@ def run_production_daily_alert(db_session: Session) -> int:
                 status,
             )
 
-            time.sleep(2)
+            # Human-like delays are handled inside send_whatsapp()
 
     try:
         db_session.commit()

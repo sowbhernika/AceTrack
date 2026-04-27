@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
   CheckCircle2,
@@ -8,8 +8,14 @@ import {
   ChevronRight,
   ArrowUpDown,
   Info,
+  Send,
+  Loader2,
+  RotateCcw,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
+import { toast } from "sonner";
 import api from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { AlertLog } from "@/types";
@@ -98,6 +104,151 @@ function ErrorTooltip({ message }: { message: string }) {
   );
 }
 
+// ---------- resend status with badge ----------
+
+interface ResendStatusProps {
+  alert: AlertLog;
+  onResent: () => void;
+}
+
+function ResendStatus({ alert, onResent }: ResendStatusProps) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const hasBeenResent = alert.resend_count > 0;
+  const isCurrentlyFailed = alert.status === "failed";
+  
+  const tooltipContent = hasBeenResent ? (
+    <div className="text-xs">
+      <div className="font-semibold text-slate-900 mb-1">Resend History</div>
+      <div className="space-y-1">
+        <div>Original: {alert.status === "success" ? "Failed" : "Failed"}</div>
+        <div>Attempts: {alert.resend_count}</div>
+        <div>Current: {alert.status === "success" ? "Success (after resend)" : "Still failed"}</div>
+        {alert.resent_at && (
+          <div>Last resent: {safeDateFormat(alert.resent_at, "MMM dd, hh:mm a")}</div>
+        )}
+      </div>
+    </div>
+  ) : null;
+  
+  return (
+    <div className="flex items-center gap-2">
+      {/* Status Badge with tooltip */}
+      <div className="relative">
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium cursor-help",
+            alert.status === "success"
+              ? hasBeenResent
+                ? "bg-green-50 text-green-700 border border-green-200"
+                : "bg-green-50 text-green-700"
+              : "bg-red-50 text-red-700"
+          )}
+          onMouseEnter={() => hasBeenResent && setShowTooltip(true)}
+          onMouseLeave={() => setShowTooltip(false)}
+          onFocus={() => hasBeenResent && setShowTooltip(true)}
+          onBlur={() => setShowTooltip(false)}
+        >
+          {alert.status === "success" ? (
+            <>
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {hasBeenResent ? (
+                <span className="flex items-center gap-1">
+                  success 
+                  <RefreshCw className="h-3 w-3" />
+                </span>
+              ) : (
+                "success"
+              )}
+            </>
+          ) : (
+            <>
+              <XCircle className="h-3.5 w-3.5" />
+              failed
+            </>
+          )}
+        </span>
+        
+        {/* Tooltip */}
+        {showTooltip && tooltipContent && (
+          <div className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
+            {tooltipContent}
+            <div className="absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-slate-200 bg-white" />
+          </div>
+        )}
+      </div>
+
+      {/* Resend Count Badge */}
+      {hasBeenResent && (
+        <span 
+          className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800"
+          title={`Resent ${alert.resend_count} time${alert.resend_count > 1 ? 's' : ''}`}
+        >
+          ×{alert.resend_count}
+        </span>
+      )}
+
+      {/* Resend Button */}
+      {isCurrentlyFailed && (
+        <ResendButton alert={alert} onResent={onResent} />
+      )}
+    </div>
+  );
+}
+
+// ---------- resend button ----------
+
+function ResendButton({ alert, onResent }: { alert: AlertLog; onResent: () => void }) {
+  const [isResending, setIsResending] = useState(false);
+
+  const handleResend = async () => {
+    setIsResending(true);
+    try {
+      const response = await api.post(`/alerts/resend/${alert.id}`);
+      if (response.data.success) {
+        toast.success(`Message resent successfully to ${alert.manager_name}`);
+        onResent();
+      } else {
+        toast.error(`Resend failed: ${response.data.error || 'Unknown error'}`);
+      }
+    } catch (error: any) {
+      toast.error(`Resend failed: ${error?.response?.data?.detail || 'Network error'}`);
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  if (alert.status !== "failed") {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleResend}
+      disabled={isResending}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+        isResending
+          ? "cursor-not-allowed bg-slate-100 text-slate-400"
+          : "bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800"
+      )}
+      title="Resend failed message"
+    >
+      {isResending ? (
+        <>
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Sending...
+        </>
+      ) : (
+        <>
+          <RotateCcw className="h-3 w-3" />
+          Resend
+        </>
+      )}
+    </button>
+  );
+}
+
 // ---------- select component ----------
 
 interface FilterSelectProps {
@@ -148,7 +299,117 @@ function MiniStat({ label, value, color, bgColor }: MiniStatProps) {
 
 // ---------- main component ----------
 
+// ---------- send now dropdown ----------
+
+const SEND_OPTIONS = [
+  { value: "all", label: "All Alerts" },
+  { value: "sales_daily", label: "Sales Daily" },
+  { value: "sales_mtd", label: "Sales MTD" },
+  { value: "production_daily", label: "Production Daily" },
+  { value: "production_mtd", label: "Production MTD" },
+];
+
+function SendNowButton({ onSent }: { onSent: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendingType, setSendingType] = useState("");
+
+  const handleSend = async (alertType: string) => {
+    setSending(true);
+    setSendingType(alertType);
+    setOpen(false);
+    try {
+      const res = await api.post(`/alerts/send-now?alert_type=${alertType}`);
+      const taskId = res.data.task_id;
+      toast.success(
+        `${alertType === "all" ? "All alerts" : alertType.replace(/_/g, " ")} triggered! Sending in background...`
+      );
+
+      // Poll for completion
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await api.get(`/alerts/send-now/status/${taskId}`);
+          if (statusRes.data.status === "completed") {
+            clearInterval(poll);
+            setSending(false);
+            setSendingType("");
+            toast.success(
+              `Done! ${statusRes.data.total_sent} alert(s) sent.`
+            );
+            onSent();
+          }
+        } catch {
+          // keep polling
+        }
+      }, 3000);
+
+      // Stop polling after 5 minutes
+      setTimeout(() => {
+        clearInterval(poll);
+        setSending(false);
+        setSendingType("");
+      }, 300000);
+    } catch {
+      toast.error("Failed to trigger alerts.");
+      setSending(false);
+      setSendingType("");
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => !sending && setOpen(!open)}
+        disabled={sending}
+        className={cn(
+          "inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors",
+          sending
+            ? "cursor-not-allowed bg-blue-400"
+            : "bg-blue-600 hover:bg-blue-700"
+        )}
+      >
+        {sending ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Sending {sendingType.replace(/_/g, " ")}...
+          </>
+        ) : (
+          <>
+            <Send className="h-4 w-4" />
+            Send Now
+          </>
+        )}
+      </button>
+      {open && !sending && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-full z-50 mt-2 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+            {SEND_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => handleSend(opt.value)}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-slate-700 transition-colors hover:bg-blue-50 hover:text-blue-700"
+              >
+                <Send className="h-3.5 w-3.5" />
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------- main component ----------
+
 export default function AlertLogs() {
+  const queryClient = useQueryClient();
   const [filterType, setFilterType] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterCompany, setFilterCompany] = useState("all");
@@ -190,6 +451,8 @@ export default function AlertLogs() {
   const totalAlerts = filtered.length;
   const successCount = filtered.filter((a) => a.status === "success").length;
   const failedCount = filtered.filter((a) => a.status === "failed").length;
+  const resentCount = filtered.filter((a) => a.resend_count > 0).length;
+  const resentSuccessCount = filtered.filter((a) => a.resend_count > 0 && a.status === "success").length;
   const successRate =
     totalAlerts > 0 ? ((successCount / totalAlerts) * 100).toFixed(1) : "0.0";
 
@@ -220,7 +483,37 @@ export default function AlertLogs() {
             View history of escalation alerts and notifications.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <SendNowButton
+            onSent={() =>
+              queryClient.invalidateQueries({
+                queryKey: ["dashboard", "alerts", "recent"],
+              })
+            }
+          />
+          {failedCount > 0 && (
+            <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm">
+              <AlertTriangle className="h-4 w-4 text-red-600" />
+              <span className="text-red-700 font-medium">
+                {failedCount} failed alerts
+                {(() => {
+                  const resentSuccessCount = filtered.filter(a => a.resend_count > 0 && a.status === "success").length;
+                  return resentSuccessCount > 0 ? (
+                    <span className="ml-2 text-green-600">
+                      ({resentSuccessCount} resent successfully)
+                    </span>
+                  ) : null;
+                })()}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleFilterChange(setFilterStatus, "failed")}
+                className="text-red-600 hover:text-red-800 underline"
+              >
+                View Failed
+              </button>
+            </div>
+          )}
           <FilterSelect
             label="Alert Type"
             value={filterType}
@@ -243,7 +536,7 @@ export default function AlertLogs() {
       </div>
 
       {/* ---------- Mini Stats ---------- */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <MiniStat
           label="Total Alerts"
           value={totalAlerts}
@@ -263,6 +556,12 @@ export default function AlertLogs() {
           bgColor="border-red-200 bg-red-50"
         />
         <MiniStat
+          label="Resent"
+          value={`${resentSuccessCount}/${resentCount}`}
+          color="text-blue-600"
+          bgColor="border-blue-200 bg-blue-50"
+        />
+        <MiniStat
           label="Success Rate"
           value={`${successRate}%`}
           color={
@@ -272,7 +571,7 @@ export default function AlertLogs() {
                 ? "text-yellow-600"
                 : "text-red-600"
           }
-          bgColor="border-blue-200 bg-blue-50"
+          bgColor="border-purple-200 bg-purple-50"
         />
       </div>
 
@@ -411,21 +710,12 @@ export default function AlertLogs() {
 
                       {/* Status */}
                       <td className="whitespace-nowrap px-4 py-3">
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
-                            alert.status === "success"
-                              ? "bg-green-50 text-green-700"
-                              : "bg-red-50 text-red-700"
-                          )}
-                        >
-                          {alert.status === "success" ? (
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                          ) : (
-                            <XCircle className="h-3.5 w-3.5" />
-                          )}
-                          {alert.status}
-                        </span>
+                        <ResendStatus 
+                          alert={alert} 
+                          onResent={() => queryClient.invalidateQueries({
+                            queryKey: ["dashboard", "alerts", "recent"],
+                          })}
+                        />
                       </td>
 
                       {/* Error */}

@@ -25,6 +25,8 @@ from backend.db.models import (
     ProductionPlan,
     SalesByBilling,
 )
+from backend.jobs.file_status import are_alerts_suspended, get_suspension_reason, check_required_files
+from backend.jobs.temp_data_processor import get_clean_current_month_sales_range
 
 logger = logging.getLogger(__name__)
 
@@ -74,27 +76,34 @@ def run_sales_mtd_alert(db_session: Session) -> int:
         total_cycle_days,
     )
 
-    # ------------------------------------------------------------------
-    # 1. Cumulative sales per company (cycle_start to yesterday)
-    # ------------------------------------------------------------------
-    sales_rows = (
-        db_session.query(
-            SalesByBilling.company_code,
-            func.sum(SalesByBilling.converted_tax).label("total_converted_tax"),
-        )
-        .filter(
-            SalesByBilling.billing_date >= start_str,
-            SalesByBilling.billing_date <= yesterday_str,
-            SalesByBilling.company_code.isnot(None),
-        )
-        .group_by(SalesByBilling.company_code)
-        .all()
-    )
+    # FORCE LOG: Check if required files are available before proceeding
+    logger.error("*** MTD VALIDATION CHECK STARTING ***")
+    files_ok = check_required_files()
+    logger.error(f"*** check_required_files() returned: {files_ok} ***")
+    
+    if not files_ok:
+        logger.error("*** BLOCKING MTD ALERTS - FILES NOT OK ***")
+        logger.error("Required files missing - suspending sales MTD alerts")
+        logger.error("Suspension reason: %s", get_suspension_reason())
+        return 0
+    
+    suspended = are_alerts_suspended()
+    logger.error(f"*** are_alerts_suspended() returned: {suspended} ***")
+    if suspended:
+        logger.error("*** BLOCKING MTD ALERTS - ALERTS SUSPENDED ***")
+        logger.warning("Alerts are suspended: %s", get_suspension_reason())
+        return 0
+    
+    logger.error("*** MTD ALERTS PROCEEDING - VALIDATION PASSED ***")
 
+    # ------------------------------------------------------------------
+    # 1. Get clean cumulative sales per company (cycle_start to yesterday)
+    # ------------------------------------------------------------------
+    sales_data = get_clean_current_month_sales_range(db_session, start_str, yesterday_str)
+    
     sales_by_company: dict[str, float] = {}
-    for row in sales_rows:
-        total = row.total_converted_tax or 0
-        sales_by_company[row.company_code] = round(total / 100_000, 2)
+    for company_code, data in sales_data.items():
+        sales_by_company[company_code] = data['mtd_sales_lakhs']
 
     # ------------------------------------------------------------------
     # 2. Cumulative targets per company (cycle_start to yesterday)

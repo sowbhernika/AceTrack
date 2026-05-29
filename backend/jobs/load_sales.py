@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.db.models import SalesByBilling
 from backend.jobs.cleanup import clear_sales_data
+from backend.alerts.telegram_notifier import send_file_missing_alert, send_data_load_failure
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +33,32 @@ def _billing_cycle_range(reference: date | None = None) -> tuple[date, date]:
     """Return ``(start, end)`` of the monthly cycle containing *reference*.
 
     Cycle runs from the 1st to the last day of the month.
+    
+    Special handling: On the 1st day of any month, include the previous 
+    month's last day to ensure yesterday's data is available for alerts.
     """
     import calendar
 
     if reference is None:
         reference = datetime.now(IST).date()
 
-    start = reference.replace(day=1)
+    # If today is the 1st of the month, extend range to include previous month's end
+    if reference.day == 1:
+        # Include previous month's last day
+        if reference.month == 1:
+            # January 1st - include December 31st of previous year
+            prev_month_end = date(reference.year - 1, 12, 31)
+        else:
+            # Other months - include last day of previous month
+            prev_month = reference.month - 1
+            prev_year = reference.year
+            last_day_prev = calendar.monthrange(prev_year, prev_month)[1]
+            prev_month_end = date(prev_year, prev_month, last_day_prev)
+        
+        start = prev_month_end
+    else:
+        start = reference.replace(day=1)
+    
     last_day = calendar.monthrange(reference.year, reference.month)[1]
     end = reference.replace(day=last_day)
 
@@ -91,10 +111,12 @@ def load_sales_from_file(db_session: Session) -> int:
         )
     except FileNotFoundError:
         logger.error("Sales CSV not found: %s", csv_path)
-        return 0
-    except Exception:
+        send_file_missing_alert(csv_path, "Sales CSV")
+        return -1  # Return -1 to indicate file missing error
+    except Exception as e:
         logger.exception("Error reading sales CSV")
-        return 0
+        send_data_load_failure("Sales CSV", str(e))
+        return -1  # Return -1 to indicate data load error
 
     if df.empty:
         logger.warning("Sales CSV is empty")
@@ -157,6 +179,18 @@ def load_sales_from_file(db_session: Session) -> int:
 
     logger.info("%d rows within billing cycle", len(df))
 
+    # --- Remove duplicates from CSV data ---------------------------------------
+    # Only remove truly identical rows - all fields must match
+    before_dedup = len(df)
+    df = df.drop_duplicates(keep='first')  # Remove rows where ALL fields are identical
+    after_dedup = len(df)
+    
+    duplicates_removed = before_dedup - after_dedup
+    if duplicates_removed > 0:
+        logger.warning("Removed %d duplicate rows from CSV data", duplicates_removed)
+    else:
+        logger.info("No duplicates found in CSV data")
+
     # --- Derive computed columns -----------------------------------------------
     df["posting_date_parsed"] = df.get("posting_date", pd.Series(dtype=str)).apply(
         _parse_date
@@ -183,53 +217,55 @@ def load_sales_from_file(db_session: Session) -> int:
     df["company_code_derived"] = df["plant"].map(settings.PLANT_TO_COMPANY)
     df["location"] = df["company_code_derived"].map(settings.COMPANY_LOCATIONS)
 
-    # --- Clear existing data --------------------------------------------------
-    clear_sales_data(db_session)
-
-    # --- Bulk insert ----------------------------------------------------------
-    records: list[SalesByBilling] = []
-    for _, row in df.iterrows():
-        records.append(
-            SalesByBilling(
-                billing_date=row.get("billing_date_parsed"),
-                ref_invoice_number=row.get("ref_invoice_number") or None,
-                customer=row.get("customer") or None,
-                customer_name=row.get("customer_name") or None,
-                item_description=row.get("item_description") or None,
-                quantity=row.get("quantity"),
-                taxable_value=row.get("taxable_value"),
-                converted_tax=row.get("converted_tax"),
-                taxable_value_lakhs=row.get("taxable_value_lakhs"),
-                converted_tax_lakhs=row.get("converted_tax_lakhs"),
-                invoice_value_inr=row.get("invoice_value_inr"),
-                profit_center=row.get("profit_center") or None,
-                location=row.get("location") or None,
-                company_code=row.get("company_code_derived") or None,
-                sgst=row.get("sgst"),
-                cgst=row.get("cgst"),
-                igst=row.get("igst"),
-                tcs=row.get("tcs"),
-                packing=row.get("packing"),
-                round_off=row.get("round_off"),
-                gstin_number=row.get("gstin_number") or None,
-                gst_rate=row.get("gst_rate"),
-                tcs_rate=row.get("tcs_rate"),
-                posting_date=row.get("posting_date_parsed"),
-                material=row.get("material") or None,
-                name=row.get("name") or None,
-                document_number=row.get("document_number") or None,
-                billing_type=row.get("billing_type") or None,
-                currency=row.get("currency") or None,
-            )
-        )
-
+    # --- Clear existing data and insert in single transaction ---------------
     try:
+        # Clear existing data first
+        clear_sales_data(db_session)
+        
+        # Build records list
+        records: list[SalesByBilling] = []
+        for _, row in df.iterrows():
+            records.append(
+                SalesByBilling(
+                    billing_date=row.get("billing_date_parsed"),
+                    ref_invoice_number=row.get("ref_invoice_number") or None,
+                    customer=row.get("customer") or None,
+                    customer_name=row.get("customer_name") or None,
+                    item_description=row.get("item_description") or None,
+                    quantity=row.get("quantity"),
+                    taxable_value=row.get("taxable_value"),
+                    converted_tax=row.get("converted_tax"),
+                    taxable_value_lakhs=row.get("taxable_value_lakhs"),
+                    converted_tax_lakhs=row.get("converted_tax_lakhs"),
+                    invoice_value_inr=row.get("invoice_value_inr"),
+                    profit_center=row.get("profit_center") or None,
+                    location=row.get("location") or None,
+                    company_code=row.get("company_code_derived") or None,
+                    sgst=row.get("sgst"),
+                    cgst=row.get("cgst"),
+                    igst=row.get("igst"),
+                    tcs=row.get("tcs"),
+                    packing=row.get("packing"),
+                    round_off=row.get("round_off"),
+                    gstin_number=row.get("gstin_number") or None,
+                    gst_rate=row.get("gst_rate"),
+                    tcs_rate=row.get("tcs_rate"),
+                    posting_date=row.get("posting_date_parsed"),
+                    material=row.get("material") or None,
+                    name=row.get("name") or None,
+                    document_number=row.get("document_number") or None,
+                    billing_type=row.get("billing_type") or None,
+                    currency=row.get("currency") or None,
+                )
+            )
+
+        # Insert all records
         db_session.bulk_save_objects(records)
         db_session.commit()
-        logger.info("Inserted %d sales rows", len(records))
+        logger.info("Successfully loaded %d sales rows (cleared existing data first)", len(records))
+        return len(records)
+        
     except Exception:
         db_session.rollback()
-        logger.exception("Failed to insert sales data")
+        logger.exception("Failed to load sales data - transaction rolled back")
         return 0
-
-    return len(records)

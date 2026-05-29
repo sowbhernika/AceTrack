@@ -24,6 +24,8 @@ from backend.db.models import (
     ProductionPlan,
     SalesByBilling,
 )
+from backend.jobs.file_status import are_alerts_suspended, get_suspension_reason, check_required_files
+from backend.jobs.temp_data_processor import get_clean_current_month_sales
 
 logger = logging.getLogger(__name__)
 
@@ -43,32 +45,20 @@ def run_sales_daily_alert(db_session: Session) -> int:
     yesterday = _yesterday_ist()
     logger.info("Running daily sales alert for %s", yesterday)
 
-    # ------------------------------------------------------------------
-    # 1. Aggregate yesterday's sales per company
-    # ------------------------------------------------------------------
-    sales_rows = (
-        db_session.query(
-            SalesByBilling.company_code,
-            func.sum(SalesByBilling.converted_tax).label("total_converted_tax"),
-            func.count(SalesByBilling.id).label("transaction_count"),
-            func.count(func.distinct(SalesByBilling.customer)).label(
-                "unique_customers"
-            ),
-        )
-        .filter(SalesByBilling.billing_date == yesterday)
-        .filter(SalesByBilling.company_code.isnot(None))
-        .group_by(SalesByBilling.company_code)
-        .all()
-    )
+    # Check if required files are available before proceeding
+    if not check_required_files():
+        logger.error("Required files missing - suspending sales daily alerts")
+        logger.error("Suspension reason: %s", get_suspension_reason())
+        return 0
+    
+    if are_alerts_suspended():
+        logger.warning("Alerts are suspended: %s", get_suspension_reason())
+        return 0
 
-    sales_by_company: dict[str, dict] = {}
-    for row in sales_rows:
-        total = row.total_converted_tax or 0
-        sales_by_company[row.company_code] = {
-            "daily_sales_lakhs": round(total / 100_000, 2),
-            "transaction_count": row.transaction_count,
-            "unique_customers": row.unique_customers,
-        }
+    # ------------------------------------------------------------------
+    # 1. Get clean sales data from temporary processor
+    # ------------------------------------------------------------------
+    sales_by_company = get_clean_current_month_sales(db_session, yesterday)
 
     logger.info(
         "Sales data found for companies: %s", list(sales_by_company.keys())
@@ -119,8 +109,8 @@ def run_sales_daily_alert(db_session: Session) -> int:
             "gap_to_target": gap,
             "priority_level": priority,
             "manager_name": "",
-            "transaction_count": sales_info.get("transaction_count", 0),
-            "unique_customers": sales_info.get("unique_customers", 0),
+            "transaction_count": sales_info.get("record_count", 0),
+            "unique_customers": 0,  # Will need separate query for unique customers
         }
 
         # Fetch active managers for this company
@@ -135,6 +125,11 @@ def run_sales_daily_alert(db_session: Session) -> int:
 
         if not managers:
             logger.info("No active managers for %s - skipping", company)
+            continue
+
+        # Only send daily alerts if performance is below target (< 100%)
+        if pct >= 100:
+            logger.info("Skipping daily alert for %s - performance %.2f%% meets target", company, pct)
             continue
 
         for mgr in managers:

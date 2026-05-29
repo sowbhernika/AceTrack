@@ -169,6 +169,19 @@ def run_sales_mtd_alert(db_session: Session) -> int:
             .all()
         )
 
+        # Same person can supervise multiple plants of the same company
+        # (e.g. AMC has both AM03 and AM07, so one manager has 2 rows here).
+        # Send one message per phone per company.
+        seen_phones: set[str] = set()
+        unique_managers = []
+        for m in managers:
+            phone = (m.manager_phone or "").strip()
+            if not phone or phone in seen_phones:
+                continue
+            seen_phones.add(phone)
+            unique_managers.append(m)
+        managers = unique_managers
+
         if not managers:
             logger.info("No active managers for %s - skipping", company)
             continue

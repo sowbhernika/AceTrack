@@ -70,37 +70,23 @@ class TempDataProcessor:
             result = self.db_session.execute(text(extract_sql))
             extracted_count = result.rowcount
             logger.info(f"Extracted {extracted_count} current month records to temp table")
-            
-            # 2. Remove truly identical duplicate records from temp table
-            # Only remove rows where ALL fields are exactly the same
-            dedup_sql = """
-            DELETE FROM temp_sales_current_month
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM (
-                    SELECT id, billing_date, document_number, material, 
-                           converted_tax, customer, quantity, item_description,
-                           ref_invoice_number, customer_name, taxable_value,
-                           profit_center, company_code, posting_date
-                    FROM temp_sales_current_month
-                ) AS subquery
-                GROUP BY billing_date, document_number, material, 
-                        converted_tax, customer, quantity, item_description,
-                        ref_invoice_number, customer_name, taxable_value,
-                        profit_center, company_code, posting_date
-            )
-            """
-            
-            dedup_result = self.db_session.execute(text(dedup_sql))
-            duplicates_removed = dedup_result.rowcount
-            
-            # 3. Get final count
+
+            # NOTE: no dedup here. SAP intentionally emits identical-looking rows
+            # for separate physical fulfillments of the same line — those are real
+            # sales. The previous DELETE-by-MIN(id) was correctly keyed on every
+            # business column including converted_tax/taxable_value, which made it
+            # equivalent to drop_duplicates(all_columns) and erased legitimate
+            # repeated lines (e.g. the APE USD-export rows on doc 0700000340).
+            duplicates_removed = 0
+
+            # Get final count
             final_count_result = self.db_session.execute(text("SELECT COUNT(*) FROM temp_sales_current_month"))
             final_count = final_count_result.scalar()
-            
+
             self.db_session.commit()
-            
-            logger.info(f"Removed {duplicates_removed} duplicates, {final_count} clean records remain")
-            
+
+            logger.info(f"{final_count} records loaded into temp table (no dedup applied)")
+
             return final_count, duplicates_removed
             
         except Exception as e:

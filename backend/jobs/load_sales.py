@@ -179,17 +179,10 @@ def load_sales_from_file(db_session: Session) -> int:
 
     logger.info("%d rows within billing cycle", len(df))
 
-    # --- Remove duplicates from CSV data ---------------------------------------
-    # Only remove truly identical rows - all fields must match
-    before_dedup = len(df)
-    df = df.drop_duplicates(keep='first')  # Remove rows where ALL fields are identical
-    after_dedup = len(df)
-    
-    duplicates_removed = before_dedup - after_dedup
-    if duplicates_removed > 0:
-        logger.warning("Removed %d duplicate rows from CSV data", duplicates_removed)
-    else:
-        logger.info("No duplicates found in CSV data")
+    # NOTE: do NOT drop_duplicates here. SAP intentionally emits identical-looking
+    # rows for separate physical fulfillments of the same line (e.g. two 10-unit
+    # deliveries of the same material on one invoice). They are real sales, not
+    # duplicates — removing them under-reports actual values.
 
     # --- Derive computed columns -----------------------------------------------
     df["posting_date_parsed"] = df.get("posting_date", pd.Series(dtype=str)).apply(
